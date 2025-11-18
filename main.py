@@ -1,8 +1,13 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from typing import List, Optional
 
-app = FastAPI()
+from database import db, create_document, get_documents
+from schemas import Appointment
+
+app = FastAPI(title="Surgeon Website API", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,11 +19,7 @@ app.add_middleware(
 
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
-
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
+    return {"message": "Surgeon Website Backend Running"}
 
 @app.get("/test")
 def test_database():
@@ -31,39 +32,59 @@ def test_database():
         "connection_status": "Not Connected",
         "collections": []
     }
-    
     try:
-        # Try to import database module
-        from database import db
-        
         if db is not None:
             response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
+            response["database_url"] = "✅ Configured" if os.getenv("DATABASE_URL") else "❌ Not Set"
+            response["database_name"] = os.getenv("DATABASE_NAME") or "❌ Not Set"
             response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
             try:
                 collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
+                response["collections"] = collections[:10]
                 response["database"] = "✅ Connected & Working"
             except Exception as e:
                 response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
         else:
             response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
     except Exception as e:
         response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
+
     response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
     response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
     return response
 
+# Appointment endpoints
+
+@app.post("/appointments", status_code=201)
+def create_appointment(appointment: Appointment):
+    """Public endpoint to submit an appointment request"""
+    try:
+        inserted_id = create_document("appointment", appointment)
+        return {"id": inserted_id, "status": "received"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+class AppointmentQuery(BaseModel):
+    email: Optional[str] = None
+    phone: Optional[str] = None
+
+@app.get("/appointments")
+def list_appointments(email: Optional[str] = None, phone: Optional[str] = None, limit: int = 50):
+    """List appointment requests (basic filter by email/phone)"""
+    try:
+        filter_dict = {}
+        if email:
+            filter_dict["email"] = email
+        if phone:
+            filter_dict["phone"] = phone
+        docs = get_documents("appointment", filter_dict, limit)
+        # Convert ObjectId to string safely
+        for d in docs:
+            if "_id" in d:
+                d["id"] = str(d.pop("_id"))
+        return {"items": docs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn
